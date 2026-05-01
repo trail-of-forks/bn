@@ -4,6 +4,7 @@ import hashlib
 import os
 import platform
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -12,20 +13,6 @@ PLUGIN_NAME = "bn_agent_bridge"
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
-
-
-def claude_home() -> Path:
-    env = os.environ.get("CLAUDE_HOME")
-    if env:
-        return Path(env).expanduser()
-    return Path.home() / ".claude"
-
-
-def codex_home() -> Path:
-    env = os.environ.get("CODEX_HOME")
-    if env:
-        return Path(env).expanduser()
-    return Path.home() / ".codex"
 
 
 def cache_home() -> Path:
@@ -116,10 +103,45 @@ def plugin_install_dir() -> Path:
     return binary_ninja_plugin_dir() / PLUGIN_NAME
 
 
-def claude_skills_dir() -> Path:
-    return claude_home() / "skills"
+@dataclass(frozen=True)
+class AgentSpec:
+    home_subdir: str
+    home_env: str
+    skills_subdir: str = "skills"
+    note: str = ""
 
 
-def codex_skills_dir() -> Path:
-    return codex_home() / "skills"
+AGENTS: dict[str, AgentSpec] = {
+    "claude_code": AgentSpec(home_subdir=".claude", home_env="CLAUDE_HOME"),
+    "codex_cli":   AgentSpec(home_subdir=".codex",  home_env="CODEX_HOME"),
+    "agentskills": AgentSpec(
+        home_subdir=".agents",
+        home_env="",
+        note="agentskills.io spec location; auto-discovered by pi-coding-agent",
+    ),
+}
+
+
+def agent_home_dir(agent: str, *, root: Path | None = None) -> Path:
+    spec = _spec(agent)
+    if root is not None:
+        return Path(root).expanduser() / spec.home_subdir
+    if spec.home_env:
+        env = os.environ.get(spec.home_env)
+        if env:
+            return Path(env).expanduser()
+    return Path.home() / spec.home_subdir
+
+
+def agent_skills_dir(agent: str, *, root: Path | None = None) -> Path:
+    return agent_home_dir(agent, root=root) / _spec(agent).skills_subdir
+
+
+def _spec(agent: str) -> AgentSpec:
+    try:
+        return AGENTS[agent]
+    except KeyError:
+        raise KeyError(
+            f"unknown agent {agent!r}; known: {sorted(AGENTS)}"
+        ) from None
 

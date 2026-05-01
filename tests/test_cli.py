@@ -451,86 +451,212 @@ def test_skill_install_copy_mode(tmp_path):
     assert (destination / "bn-vr" / "SKILL.md").exists()
 
 
+def _isolate_home(tmp_path, monkeypatch):
+    """Pin $HOME and clear agent home env vars so tests are hermetic."""
+    monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: tmp_path))
+    monkeypatch.delenv("CLAUDE_HOME", raising=False)
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+
+
 def test_skill_install_defaults_to_claude_only_without_codex_home(tmp_path, monkeypatch):
-    claude_root = tmp_path / "claude" / "skills"
-    codex_home = tmp_path / "codex"
-    codex_root = codex_home / "skills"
-    monkeypatch.setattr(bn.cli, "claude_skills_dir", lambda: claude_root)
-    monkeypatch.setattr(bn.cli, "codex_home", lambda: codex_home)
-    monkeypatch.setattr(bn.cli, "codex_skills_dir", lambda: codex_root)
+    _isolate_home(tmp_path, monkeypatch)
+    (tmp_path / ".claude").mkdir()
 
     rc = bn.cli.main(["skill", "install", "--mode", "copy"])
 
     assert rc == 0
-    assert (claude_root / "bn" / "SKILL.md").exists()
-    assert not codex_root.exists()
+    assert (tmp_path / ".claude" / "skills" / "bn" / "SKILL.md").exists()
+    assert not (tmp_path / ".codex").exists()
 
 
 def test_skill_install_defaults_to_claude_and_codex_when_codex_home_exists(tmp_path, monkeypatch):
-    claude_root = tmp_path / "claude" / "skills"
-    codex_home = tmp_path / "codex"
-    codex_root = codex_home / "skills"
-    codex_home.mkdir()
-    monkeypatch.setattr(bn.cli, "claude_skills_dir", lambda: claude_root)
-    monkeypatch.setattr(bn.cli, "codex_home", lambda: codex_home)
-    monkeypatch.setattr(bn.cli, "codex_skills_dir", lambda: codex_root)
+    _isolate_home(tmp_path, monkeypatch)
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".codex").mkdir()
 
     rc = bn.cli.main(["skill", "install", "--mode", "copy"])
 
     assert rc == 0
-    assert (claude_root / "bn" / "SKILL.md").exists()
-    assert (codex_root / "bn" / "SKILL.md").exists()
-    assert (codex_root / "bn-re" / "SKILL.md").exists()
-    assert (codex_root / "bn-vr" / "SKILL.md").exists()
+    assert (tmp_path / ".claude" / "skills" / "bn" / "SKILL.md").exists()
+    assert (tmp_path / ".codex" / "skills" / "bn" / "SKILL.md").exists()
+    assert (tmp_path / ".codex" / "skills" / "bn-re" / "SKILL.md").exists()
+    assert (tmp_path / ".codex" / "skills" / "bn-vr" / "SKILL.md").exists()
 
 
 def test_skill_install_defaults_skip_existing_destinations(tmp_path, monkeypatch):
-    claude_root = tmp_path / "claude" / "skills"
-    codex_home = tmp_path / "codex"
-    codex_root = codex_home / "skills"
-    codex_home.mkdir()
-    (claude_root / "bn").mkdir(parents=True)
-    (claude_root / "bn-re").mkdir()
-    (claude_root / "bn-vr").mkdir()
-    monkeypatch.setattr(bn.cli, "claude_skills_dir", lambda: claude_root)
-    monkeypatch.setattr(bn.cli, "codex_home", lambda: codex_home)
-    monkeypatch.setattr(bn.cli, "codex_skills_dir", lambda: codex_root)
+    _isolate_home(tmp_path, monkeypatch)
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".codex").mkdir()
+    claude_skills = tmp_path / ".claude" / "skills"
+    (claude_skills / "bn").mkdir(parents=True)
+    (claude_skills / "bn-re").mkdir()
+    (claude_skills / "bn-vr").mkdir()
 
     rc = bn.cli.main(["skill", "install", "--mode", "copy"])
 
     assert rc == 0
-    assert (codex_root / "bn" / "SKILL.md").exists()
-    assert (codex_root / "bn-re" / "SKILL.md").exists()
-    assert (codex_root / "bn-vr" / "SKILL.md").exists()
+    # Existing claude dirs are preserved (skipped); codex gets a fresh install.
+    assert (tmp_path / ".codex" / "skills" / "bn" / "SKILL.md").exists()
+    assert (tmp_path / ".codex" / "skills" / "bn-re" / "SKILL.md").exists()
+    assert (tmp_path / ".codex" / "skills" / "bn-vr" / "SKILL.md").exists()
+
+
+def test_skill_install_force_creates_missing_agent_homes(tmp_path, monkeypatch):
+    _isolate_home(tmp_path, monkeypatch)
+    # No agent home exists.
+
+    rc = bn.cli.main(["skill", "install", "--mode", "copy", "-f"])
+
+    assert rc == 0
+    assert (tmp_path / ".claude" / "skills" / "bn" / "SKILL.md").exists()
+    assert (tmp_path / ".codex" / "skills" / "bn" / "SKILL.md").exists()
+    assert (tmp_path / ".agents" / "skills" / "bn" / "SKILL.md").exists()
+
+
+def test_skill_install_root_overrides_home(tmp_path, monkeypatch):
+    _isolate_home(tmp_path, monkeypatch)
+    workspace = tmp_path / "work"
+
+    rc = bn.cli.main(
+        ["skill", "install", "--mode", "copy", "--root", str(workspace)]
+    )
+
+    assert rc == 0
+    assert (workspace / ".claude" / "skills" / "bn" / "SKILL.md").exists()
+    assert (workspace / ".codex" / "skills" / "bn" / "SKILL.md").exists()
+    assert (workspace / ".agents" / "skills" / "bn" / "SKILL.md").exists()
+    # Nothing leaked into the env-derived $HOME.
+    assert not (tmp_path / ".claude").exists()
+
+
+def test_skill_install_agentskills_only(tmp_path, monkeypatch):
+    _isolate_home(tmp_path, monkeypatch)
+
+    rc = bn.cli.main(
+        [
+            "skill", "install", "--mode", "copy", "-f",
+            "--agent", "agentskills",
+        ]
+    )
+
+    assert rc == 0
+    # pi-coding-agent reads ~/.agents/skills/ natively.
+    assert (tmp_path / ".agents" / "skills" / "bn" / "SKILL.md").exists()
+    assert not (tmp_path / ".claude").exists()
+    assert not (tmp_path / ".codex").exists()
+
+
+def test_skill_install_root_with_agent_filters_targets(tmp_path, monkeypatch):
+    _isolate_home(tmp_path, monkeypatch)
+    workspace = tmp_path / "work"
+
+    rc = bn.cli.main(
+        [
+            "skill", "install", "--mode", "copy",
+            "--root", str(workspace),
+            "--agent", "codex_cli",
+        ]
+    )
+
+    assert rc == 0
+    assert (workspace / ".codex" / "skills" / "bn" / "SKILL.md").exists()
+    assert not (workspace / ".claude").exists()
+
+
+def test_skill_install_codex_home_env_var_relocates_target(tmp_path, monkeypatch):
+    _isolate_home(tmp_path, monkeypatch)
+    relocated = tmp_path / "alt-codex"
+    relocated.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(relocated))
+
+    rc = bn.cli.main(
+        ["skill", "install", "--mode", "copy", "--agent", "codex_cli"]
+    )
+
+    assert rc == 0
+    # CODEX_HOME points at a dir that itself becomes the home — skills land
+    # at <CODEX_HOME>/skills, not <CODEX_HOME>/.codex/skills.
+    assert (relocated / "skills" / "bn" / "SKILL.md").exists()
+
+
+def test_skill_install_unknown_agent_rejected(tmp_path, monkeypatch):
+    _isolate_home(tmp_path, monkeypatch)
+
+    with pytest.raises(SystemExit) as exc_info:
+        bn.cli.main(
+            ["skill", "install", "--mode", "copy", "--agent", "gemini_cli"]
+        )
+    assert exc_info.value.code == 2
+
+
+def test_skill_install_root_and_dest_are_mutually_exclusive(tmp_path, monkeypatch):
+    _isolate_home(tmp_path, monkeypatch)
+
+    rc = bn.cli.main(
+        [
+            "skill", "install", "--mode", "copy",
+            "--dest", str(tmp_path / "x"),
+            "--root", str(tmp_path / "y"),
+        ]
+    )
+
+    assert rc == 2
+
+
+def test_skill_install_warns_about_skipped_agents(tmp_path, monkeypatch, capsys):
+    _isolate_home(tmp_path, monkeypatch)
+    (tmp_path / ".claude").mkdir()
+    # .codex deliberately missing.
+
+    rc = bn.cli.main(["skill", "install", "--mode", "copy"])
+
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "skipping agent 'codex_cli'" in err
+
+
+def test_skill_install_list_agents(tmp_path, monkeypatch, capsys):
+    _isolate_home(tmp_path, monkeypatch)
+    workspace = tmp_path / "work"
+
+    rc = bn.cli.main(
+        ["skill", "install", "--list-agents", "--root", str(workspace)]
+    )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "claude_code" in out
+    assert "codex_cli" in out
+    assert "agentskills" in out
+    assert str(workspace / ".codex" / "skills") in out
+    assert str(workspace / ".agents" / "skills") in out
+    # The note should surface so users know which harness reads agentskills.
+    assert "pi-coding-agent" in out
 
 
 def test_skill_install_default_output_is_text(tmp_path, monkeypatch, capsys):
-    claude_root = tmp_path / "claude" / "skills"
-    codex_home = tmp_path / "codex"
-    monkeypatch.setattr(bn.cli, "claude_skills_dir", lambda: claude_root)
-    monkeypatch.setattr(bn.cli, "codex_home", lambda: codex_home)
+    _isolate_home(tmp_path, monkeypatch)
+    (tmp_path / ".claude").mkdir()
 
     rc = bn.cli.main(["skill", "install", "--mode", "copy"])
 
     assert rc == 0
     output = capsys.readouterr().out
     assert output.startswith("Installed skills (copy):\n")
-    assert "- " + str(claude_root / "bn") in output
+    assert "- " + str(tmp_path / ".claude" / "skills" / "bn") in output
     assert '"installed"' not in output
 
 
 def test_skill_install_json_output_remains_available(tmp_path, monkeypatch, capsys):
-    claude_root = tmp_path / "claude" / "skills"
-    codex_home = tmp_path / "codex"
-    monkeypatch.setattr(bn.cli, "claude_skills_dir", lambda: claude_root)
-    monkeypatch.setattr(bn.cli, "codex_home", lambda: codex_home)
+    _isolate_home(tmp_path, monkeypatch)
 
-    rc = bn.cli.main(["skill", "install", "--mode", "copy", "--format", "json"])
+    rc = bn.cli.main(["skill", "install", "--mode", "copy", "--format", "json", "-f"])
 
     assert rc == 0
     output = capsys.readouterr().out
     assert '"installed": true' in output
     assert '"installed_destinations"' in output
+    assert '"agents"' in output
 
 
 def test_skill_install_custom_dest_still_fails_when_destination_exists(tmp_path):

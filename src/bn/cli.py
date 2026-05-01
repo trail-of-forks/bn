@@ -11,9 +11,9 @@ from typing import Any, Callable
 from . import session_state
 from .output import render_artifact_envelope, write_output_result
 from .paths import (
-    claude_skills_dir,
-    codex_home,
-    codex_skills_dir,
+    AGENTS,
+    agent_home_dir,
+    agent_skills_dir,
     plugin_install_dir,
     plugin_source_dir,
     repo_root,
@@ -1184,6 +1184,7 @@ def _render_skill_install_text(value: Any) -> str:
 
     installed = value.get("installed_destinations")
     skipped = value.get("skipped_destinations")
+    skipped_agents = value.get("skipped_agents")
     lines = []
 
     if isinstance(installed, list) and installed:
@@ -1195,6 +1196,12 @@ def _render_skill_install_text(value: Any) -> str:
     if isinstance(skipped, list) and skipped:
         lines.append("Skipped existing destinations:")
         lines.extend(f"- {dest}" for dest in skipped)
+
+    if isinstance(skipped_agents, list) and skipped_agents:
+        lines.append("Skipped agents (home dir missing; pass -f to install anyway):")
+        for entry in skipped_agents:
+            if isinstance(entry, dict):
+                lines.append(f"- {entry.get('agent')}: {entry.get('home')}")
 
     return "\n".join(lines) + "\n"
 
@@ -1326,21 +1333,61 @@ def _check_install_destination(dest: Path, *, force: bool) -> None:
 
 @command("skill", "install", help="Install the bundled agent skills", fmt="text",
          args=[
-             arg("--dest", type=Path, help="Custom install destination"),
+             arg("--dest", type=Path,
+                 help="Custom install destination (single dir; bypasses the agent registry)"),
+             arg("--root", type=Path,
+                 help="Treat as $HOME-equivalent; install for each --agent under "
+                      "<root>/<agent home>/skills. Note: --root joins each agent's "
+                      "subdir (e.g. <root>/.claude), unlike $CLAUDE_HOME/$CODEX_HOME "
+                      "which replace the home dir directly."),
+             arg("--agent", action="append", choices=tuple(AGENTS.keys()), default=None,
+                 help="Restrict to this agent (repeatable). Default: all known agents. "
+                      "'agentskills' is the agentskills.io spec location auto-discovered "
+                      "by pi-coding-agent."),
+             arg("--list-agents", action="store_true",
+                 help="Print known agents and the path each would install to, then exit."),
              arg("--mode", choices=("symlink", "copy"), default="symlink"),
-             arg("--force", action="store_true"),
+             arg("-f", "--force", action="store_true",
+                 help="Create missing destination dirs and overwrite existing skill dirs."),
          ])
 def _skill_install(args: argparse.Namespace) -> int:
+    if args.list_agents:
+        return _skill_install_list_agents(args)
+
+    if args.dest is not None and (args.root is not None or args.agent):
+        raise BridgeError("--dest is mutually exclusive with --root and --agent")
+
     skills_root = repo_root() / "skills"
     explicit_dest = args.dest is not None
-    target_roots = [args.dest] if explicit_dest else _default_skill_install_roots()
-    install_plan = []
-    results = []
+
+    skipped_agents: list[tuple[str, Path]] = []
+    target_roots: list[tuple[str | None, Path]] = []
+    if explicit_dest:
+        target_roots.append((None, args.dest))
+    else:
+        agents = args.agent if args.agent else list(AGENTS)
+        for agent in agents:
+            home = agent_home_dir(agent, root=args.root)
+            skills_dir = agent_skills_dir(agent, root=args.root)
+            include = args.force or args.root is not None or home.exists()
+            if include:
+                target_roots.append((agent, skills_dir))
+            else:
+                skipped_agents.append((agent, home))
+        for name, home in skipped_agents:
+            print(
+                f"warning: skipping agent {name!r} — home dir {home} does not exist "
+                f"(use -f/--force or --root to install anyway)",
+                file=sys.stderr,
+            )
+
+    install_plan: list[tuple[Path, Path]] = []
+    results: list[dict[str, Any]] = []
     for source in sorted(skills_root.iterdir()):
         if not source.is_dir() or not (source / "SKILL.md").exists():
             continue
         destinations = []
-        for target_root in target_roots:
+        for _agent, target_root in target_roots:
             dest = target_root / source.name
             install_plan.append((source, dest))
             destinations.append(str(dest))
@@ -1348,13 +1395,12 @@ def _skill_install(args: argparse.Namespace) -> int:
             {
                 "skill": source.name,
                 "source": str(source),
-                "destination": destinations[0],
                 "destinations": destinations,
             }
         )
 
-    pending_installs = []
-    skipped_destinations = []
+    pending_installs: list[tuple[Path, Path]] = []
+    skipped_destinations: list[str] = []
     for source, dest in install_plan:
         if not explicit_dest and not args.force and (dest.exists() or dest.is_symlink()):
             skipped_destinations.append(str(dest))
@@ -1368,8 +1414,12 @@ def _skill_install(args: argparse.Namespace) -> int:
     result = {
         "installed": True,
         "mode": args.mode,
+        "agents": [name for name, _ in target_roots if name is not None],
         "installed_destinations": [str(dest) for _, dest in pending_installs],
         "skipped_destinations": skipped_destinations,
+        "skipped_agents": [
+            {"agent": name, "home": str(home)} for name, home in skipped_agents
+        ],
         "skills": results,
     }
     if args.format == "text":
@@ -1378,11 +1428,34 @@ def _skill_install(args: argparse.Namespace) -> int:
     return 0
 
 
-def _default_skill_install_roots() -> list[Path]:
-    roots = [claude_skills_dir()]
-    if codex_home().is_dir():
-        roots.append(codex_skills_dir())
-    return roots
+def _skill_install_list_agents(args: argparse.Namespace) -> int:
+    selected = set(args.agent) if args.agent else set(AGENTS)
+    rows = [
+        {
+            "agent": name,
+            "home_env": spec.home_env,
+            "home_dir": str(agent_home_dir(name, root=args.root)),
+            "skills_dir": str(agent_skills_dir(name, root=args.root)),
+            "note": spec.note,
+        }
+        for name, spec in AGENTS.items()
+        if name in selected
+    ]
+    if args.format == "text":
+        lines = [f"Known agents (root={args.root or '<env or $HOME>'}):"]
+        for row in rows:
+            home_env = row["home_env"] or "<none>"
+            lines.append(
+                f"- {row['agent']}: skills_dir={row['skills_dir']} "
+                f"(home_env={home_env})"
+            )
+            if row["note"]:
+                lines.append(f"    {row['note']}")
+        result: Any = "\n".join(lines) + "\n"
+    else:
+        result = {"agents": rows}
+    _render_result(result, fmt=args.format, out_path=args.out, stem="skill-install-agents")
+    return 0
 
 
 @command("load", help="Load a binary into headless bridge",
