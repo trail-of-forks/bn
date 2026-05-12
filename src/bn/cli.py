@@ -14,6 +14,7 @@ from .paths import (
     AGENTS,
     agent_home_dir,
     agent_skills_dir,
+    bundled_skills_dir,
     plugin_install_dir,
     plugin_source_dir,
     repo_root,
@@ -1357,7 +1358,7 @@ def _skill_install(args: argparse.Namespace) -> int:
     if args.dest is not None and (args.root is not None or args.agent):
         raise BridgeError("--dest is mutually exclusive with --root and --agent")
 
-    skills_root = repo_root() / "skills"
+    skills_root = bundled_skills_dir()
     explicit_dest = args.dest is not None
 
     skipped_agents: list[tuple[str, Path]] = []

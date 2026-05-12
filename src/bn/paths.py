@@ -15,6 +15,10 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def bundled_skills_dir() -> Path:
+    return Path(__file__).resolve().parent / "skills"
+
+
 def cache_home() -> Path:
     env = os.environ.get("BN_CACHE_DIR")
     if env:
@@ -144,4 +148,3 @@ def _spec(agent: str) -> AgentSpec:
         raise KeyError(
             f"unknown agent {agent!r}; known: {sorted(AGENTS)}"
         ) from None
-
