@@ -18,6 +18,7 @@ bn-agent = "bn.headless:main"
 [dependency-groups]
 dev = [
     "pytest>=8.4.0",
+    "binaryninja-finder @ git+https://github.com/trailofbits/binaryninja-finder",
 ]
 
 [build-system]

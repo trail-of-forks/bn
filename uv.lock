@@ -3,6 +3,11 @@ revision = 3
 requires-python = ">=3.14"
 
 [[package]]
+name = "binaryninja-finder"
+version = "0.1.0"
+source = { git = "https://github.com/trailofbits/binaryninja-finder#23dbbff832a9cac1fed8a84f77d9baf74751e103" }
+
+[[package]]
 name = "bn"
 version = "0.12.2"
 source = { editable = "." }
@@ -12,6 +17,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "binaryninja-finder" },
     { name = "pytest" },
 ]
 
@@ -19,7 +25,10 @@ dev = [
 requires-dist = [{ name = "tiktoken", specifier = ">=0.12.0" }]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8.4.0" }]
+dev = [
+    { name = "binaryninja-finder", git = "https://github.com/trailofbits/binaryninja-finder" },
+    { name = "pytest", specifier = ">=8.4.0" },
+]
 
 [[package]]
 name = "certifi"
