@@ -325,6 +325,20 @@ class _ParseResult:
         self.functions = dict(functions or {})
 
 
+def test_doctor_reports_binary_ninja_installation(monkeypatch):
+    bridge = _load_bridge(monkeypatch)
+    monkeypatch.setattr(bridge.bn, "core_version", lambda: "6.0.10601 Ultimate", raising=False)
+    monkeypatch.setattr(bridge.bn, "get_install_directory", lambda: "/opt/binaryninja", raising=False)
+    instance = bridge.BinaryNinjaBridge()
+    monkeypatch.setattr(instance.targets, "refresh", lambda: [])
+
+    response = instance.dispatch({"op": "doctor"})
+
+    assert response["ok"] is True
+    assert response["result"]["binary_ninja_version"] == "6.0.10601 Ultimate"
+    assert response["result"]["binary_ninja_install_dir"] == "/opt/binaryninja"
+
+
 def test_resolve_rename_target_rejects_ambiguous_function_identifier(monkeypatch):
     bridge = _load_bridge(monkeypatch)
     instance = bridge.BinaryNinjaBridge()

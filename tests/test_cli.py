@@ -1378,7 +1378,8 @@ def test_doctor_reports_stale_loaded_plugin(monkeypatch, tmp_path, capsys):
     assert payload["instances"][0]["stale_plugin_code"] is True
 
 
-def test_doctor_text_marks_healthy_instance_ok(monkeypatch, tmp_path, capsys):
+@pytest.mark.parametrize("fmt", ["text", "json"])
+def test_doctor_marks_healthy_instance_ok(monkeypatch, tmp_path, capsys, fmt):
     install_dir = tmp_path / "install"
     source_dir = tmp_path / "source"
     install_dir.mkdir()
@@ -1409,6 +1410,8 @@ def test_doctor_text_marks_healthy_instance_ok(monkeypatch, tmp_path, capsys):
                 "plugin_name": "bn_agent_bridge",
                 "plugin_version": bn.cli.VERSION,
                 "plugin_build_id": "newbuild123456",
+                "binary_ninja_version": "6.0.10601 Ultimate",
+                "binary_ninja_install_dir": "/opt/binaryninja",
                 "pid": 123,
                 "socket_path": str(tmp_path / "bridge.sock"),
                 "targets": [],
@@ -1416,12 +1419,75 @@ def test_doctor_text_marks_healthy_instance_ok(monkeypatch, tmp_path, capsys):
         },
     )
 
-    rc = bn.cli.main(["doctor"])
+    rc = bn.cli.main(["doctor", "--format", fmt])
 
     assert rc == 0
     output = capsys.readouterr().out
+    if fmt == "json":
+        doctor = json.loads(output)["instances"][0]["doctor"]
+        assert doctor["binary_ninja_version"] == "6.0.10601 Ultimate"
+        assert doctor["binary_ninja_install_dir"] == "/opt/binaryninja"
+        return
     assert f"pid=123 plugin={bn.cli.VERSION} status=ok" in output
+    assert "  binary ninja version: 6.0.10601 Ultimate" in output
+    assert "  binary ninja install: /opt/binaryninja" in output
     assert "status=error" not in output
+
+
+@pytest.mark.parametrize("fmt", ["text", "json"])
+def test_doctor_discovers_binary_ninja_without_bridge(monkeypatch, tmp_path, capsys, fmt):
+    install_dir = tmp_path / "Binary Ninja"
+    python_dir = install_dir / "python"
+    python_dir.mkdir(parents=True)
+    (python_dir / "binaryninja.py").write_text(
+        'def core_version(): return "6.0.10601 Ultimate"\n'
+        f"def get_install_directory(): return {str(install_dir)!r}\n"
+    )
+    monkeypatch.setenv("BN_INSTALL_DIR", str(install_dir))
+    monkeypatch.setattr(bn.cli, "list_instances", lambda: [])
+
+    assert bn.cli.main(["doctor", "--format", fmt]) == 0
+
+    output = capsys.readouterr().out
+    if fmt == "json":
+        payload = json.loads(output)
+        assert payload["instances"] == []
+        assert payload["binary_ninja_version"] == "6.0.10601 Ultimate"
+        assert payload["binary_ninja_install_dir"] == str(install_dir)
+    else:
+        assert "binary ninja version: 6.0.10601 Ultimate" in output
+        assert f"binary ninja install: {install_dir}" in output
+        assert "instances:\n- none" in output
+
+
+def test_doctor_reports_binary_ninja_import_failure(monkeypatch, tmp_path, capsys):
+    python_dir = tmp_path / "python"
+    python_dir.mkdir()
+    (python_dir / "binaryninja.py").write_text('raise ImportError("test missing core")\n')
+    monkeypatch.setenv("BN_INSTALL_DIR", str(tmp_path))
+    monkeypatch.setattr(bn.cli, "list_instances", lambda: [])
+
+    assert bn.cli.main(["doctor", "--format", "json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["binary_ninja_version"] is None
+    assert payload["binary_ninja_install_dir"] == str(tmp_path)
+    assert payload["binary_ninja_error"] == "ImportError: test missing core"
+
+
+def test_doctor_reports_binary_ninja_probe_timeout(monkeypatch, capsys):
+    def timeout(*args, **kwargs):
+        raise bn.cli.subprocess.TimeoutExpired("python", 10)
+
+    monkeypatch.setattr(bn.cli, "list_instances", lambda: [])
+    monkeypatch.setattr(bn.cli.subprocess, "run", timeout)
+
+    assert bn.cli.main(["doctor"]) == 0
+
+    output = capsys.readouterr().out
+    assert "binary ninja version: <unknown>" in output
+    assert "binary ninja error: TimeoutExpired:" in output
+    assert "instances:\n- none" in output
 
 
 def test_symbol_rename_text_format_renders_mutation_summary(monkeypatch, capsys):

@@ -332,6 +332,11 @@ Check bridge state:
 bn doctor
 ```
 
+Doctor reports the Binary Ninja version and installation directory for each running
+bridge. If no bridge is running, it probes the local installation using the same
+search as `bn-agent`, including `BN_INSTALL_DIR`. These details are also available
+with `bn doctor --format json`.
+
 If `bn target list` is empty:
 
 - make sure Binary Ninja is open

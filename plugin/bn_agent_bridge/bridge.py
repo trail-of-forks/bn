@@ -724,6 +724,8 @@ class BinaryNinjaBridge:
             "pid": os.getpid(),
             "socket_path": str(self.socket_path),
             "targets": self.targets.refresh(),
+            "binary_ninja_version": bn.core_version(),
+            "binary_ninja_install_dir": bn.get_install_directory(),
         }
 
     def _load_binary(self, path: str):

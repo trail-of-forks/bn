@@ -4,11 +4,13 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Callable
 
 from . import session_state
+from .headless import _find_bn_python
 from .output import render_artifact_envelope, write_output_result
 from .paths import (
     AGENTS,
@@ -1005,9 +1007,15 @@ def _render_doctor_text(value: Any) -> str:
         f"plugin install: {value.get('plugin_install_dir', '<unknown>')}",
         f"plugin source build: {value.get('plugin_source_build_id', '<unknown>')}",
         f"plugin install build: {value.get('plugin_install_build_id', '<unknown>')}",
-        "",
-        "instances:",
     ]
+    if "binary_ninja_version" in value:
+        lines.extend([
+            f"binary ninja version: {value.get('binary_ninja_version') or '<unknown>'}",
+            f"binary ninja install: {value.get('binary_ninja_install_dir') or '<unknown>'}",
+        ])
+    if value.get("binary_ninja_error"):
+        lines.append(f"binary ninja error: {value['binary_ninja_error']}")
+    lines.extend(["", "instances:"])
     instances = list(value.get("instances") or [])
     if not instances:
         lines.append("- none")
@@ -1023,6 +1031,8 @@ def _render_doctor_text(value: Any) -> str:
             "- "
             + f"pid={item.get('pid', '<unknown>')} plugin={item.get('plugin_version', '<unknown>')} status={status}"
         )
+        lines.append(f"  binary ninja version: {doctor.get('binary_ninja_version') or '<unknown>'}")
+        lines.append(f"  binary ninja install: {doctor.get('binary_ninja_install_dir') or '<unknown>'}")
         build_id = item.get("plugin_build_id")
         if build_id:
             lines.append(f"  build: {build_id}")
@@ -1220,7 +1230,41 @@ def _parse_line_range(value: str) -> tuple[int, int]:
     return (start, end)
 
 
-@command("doctor", help="Validate bridge discovery and installation")
+def _probe_binary_ninja() -> dict[str, Any]:
+    bn_python = _find_bn_python()
+    result: dict[str, Any] = {
+        "binary_ninja_version": None,
+        "binary_ninja_install_dir": str(bn_python.parent) if bn_python else None,
+    }
+    script = """
+import json
+import sys
+if len(sys.argv) > 1:
+    sys.path.insert(0, sys.argv[1])
+try:
+    import binaryninja as bn
+    result = {
+        "binary_ninja_version": bn.core_version(),
+        "binary_ninja_install_dir": bn.get_install_directory(),
+    }
+except Exception as exc:
+    result = {"binary_ninja_error": f"{type(exc).__name__}: {exc}"}
+print(json.dumps(result))
+"""
+    cmd = [sys.executable, "-c", script]
+    if bn_python:
+        cmd.append(str(bn_python))
+    try:
+        probe = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=True)
+        result.update(json.loads(probe.stdout))
+    except subprocess.CalledProcessError as exc:
+        result["binary_ninja_error"] = exc.stderr.strip() or str(exc)
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        result["binary_ninja_error"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+@command("doctor", help="Validate bridge discovery and Binary Ninja installation")
 def _doctor(args: argparse.Namespace) -> int:
     install_dir = plugin_install_dir()
     source_dir = plugin_source_dir()
@@ -1274,6 +1318,8 @@ def _doctor(args: argparse.Namespace) -> int:
         "plugin_install_build_id": install_build_id,
         "instances": instances,
     }
+    if not instances:
+        result.update(_probe_binary_ninja())
     if args.format == "text":
         result = _render_doctor_text(result)
     _render_result(result, fmt=args.format, out_path=args.out, stem="doctor")
